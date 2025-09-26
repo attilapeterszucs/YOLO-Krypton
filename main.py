@@ -423,6 +423,9 @@ class YOLODetectionApp(ctk.CTk):
         )
         self.canvas.pack(fill="both", expand=True)
         
+        # Create video controls (initially hidden)
+        self._create_video_controls()
+        
         # Statistics tab
         self.tabview.add("Statistics")
         self.stats_tab = self.tabview.tab("Statistics")
@@ -766,8 +769,9 @@ class YOLODetectionApp(ctk.CTk):
             self._update_status(f"Loaded: {Path(file_path).name}")
             self.source_label.configure(text="🎥 Video")
             self.camera_status.configure(text="● Camera Stopped", text_color="#e53935")
-            # Show video controls
-            self.video_controls_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+            # Show video controls if they exist
+            if hasattr(self, 'video_controls_frame'):
+                self.video_controls_frame.pack(side="bottom", fill="x", padx=10, pady=5)
             # Auto-start video processing
             self._run_detection()
     
@@ -836,12 +840,25 @@ class YOLODetectionApp(ctk.CTk):
     def _display_video_frame(self, video_path):
         """Display first frame of video"""
         try:
-            cap = cv2.VideoCapture(video_path)
-            ret, frame = cap.read()
-            if ret:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(frame_rgb)
+            # Try different video backends for better compatibility
+            cap = None
+            for backend in [cv2.CAP_FFMPEG, cv2.CAP_ANY]:
+                cap = cv2.VideoCapture(video_path, backend)
+                if cap.isOpened():
+                    break
+            
+            if not cap or not cap.isOpened():
+                messagebox.showwarning("Video Error", "Could not open video file. Try a different format (MP4, AVI, MOV).")
+                return
                 
+            ret, frame = cap.read()
+            
+            if ret:
+                # Convert and display
+                rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(rgb_image)
+                
+                # Resize for display
                 display_size = config.MAX_IMAGE_DISPLAY_SIZE
                 image.thumbnail(display_size, Image.Resampling.LANCZOS)
                 
@@ -853,11 +870,13 @@ class YOLODetectionApp(ctk.CTk):
                 
                 self.canvas.configure(image=photo, text="")
                 self.canvas.image = photo
+            else:
+                messagebox.showwarning("Video Error", "Could not read video frame. File may be corrupted.")
             
             cap.release()
             
         except Exception as e:
-            messagebox.showerror("Display Error", f"Failed to display video: {e}")
+            messagebox.showerror("Display Error", f"Failed to display video: {e}\n\nTry converting the video to MP4 format.")
     
     def _run_detection(self):
         """Run object detection on current input"""
@@ -959,10 +978,23 @@ class YOLODetectionApp(ctk.CTk):
         
         # Run in thread
         def process_video():
-            # Create new video capture with frame skip support
-            cap = cv2.VideoCapture(self.current_video_path)
+            # Create new video capture with better error handling
+            cap = None
+            for backend in [cv2.CAP_FFMPEG, cv2.CAP_ANY]:
+                cap = cv2.VideoCapture(self.current_video_path, backend)
+                if cap.isOpened():
+                    break
+            
+            if not cap or not cap.isOpened():
+                self.after(0, lambda: messagebox.showerror("Video Error", "Cannot process video. Try a different format."))
+                self.is_detecting = False
+                self.after(0, lambda: self.video_play_btn.configure(text="▶"))
+                return
+                
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             self.video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if self.video_fps <= 0:
+                self.video_fps = 30  # Default FPS if not available
             self.video_total_frames = total_frames
             frame_count = self.video_frame_count if self.video_frame_count > 0 else 0
             

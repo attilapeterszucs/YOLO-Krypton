@@ -18,15 +18,64 @@ import config
 class YOLODetector:
     """Professional YOLO detector with advanced features"""
     
-    def __init__(self, model_path: str = config.DEFAULT_MODEL):
-        """Initialize YOLO detector with specified model"""
+    def __init__(self, model_path: str = config.DEFAULT_MODEL, device: str = "auto"):
+        """Initialize YOLO detector with specified model and device"""
         self.model_path = Path(config.MODELS_DIR) / model_path
         self.model = None
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.set_device(device)
         self.class_names = []
         self.colors = {}
+        self.fps = 0
+        self.frame_count = 0
+        self.last_fps_time = datetime.now()
         self.load_model(model_path)
         
+    def set_device(self, device: str = "auto"):
+        """Set the device for inference"""
+        if device.lower() == "auto":
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        elif device.lower() == "cpu":
+            self.device = 'cpu'
+        elif device.lower() in ["gpu", "cuda"]:
+            if torch.cuda.is_available():
+                self.device = 'cuda'
+            else:
+                print("CUDA not available, falling back to CPU")
+                self.device = 'cpu'
+        else:
+            self.device = 'cpu'
+        
+        # Update model device if model is loaded
+        if self.model:
+            self.model.to(self.device)
+        
+        return self.device
+    
+    def get_device_info(self):
+        """Get information about the current device"""
+        info = {
+            'device': self.device,
+            'device_name': 'CPU',
+            'cuda_available': torch.cuda.is_available(),
+            'memory_info': {}
+        }
+        
+        if self.device == 'cuda' and torch.cuda.is_available():
+            info['device_name'] = torch.cuda.get_device_name(0)
+            info['cuda_version'] = torch.version.cuda
+            # Get GPU memory info
+            mem_allocated = torch.cuda.memory_allocated(0) / 1024**3  # GB
+            mem_reserved = torch.cuda.memory_reserved(0) / 1024**3  # GB
+            mem_total = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+            info['memory_info'] = {
+                'allocated': f"{mem_allocated:.2f} GB",
+                'reserved': f"{mem_reserved:.2f} GB",
+                'total': f"{mem_total:.2f} GB",
+                'free': f"{mem_total - mem_allocated:.2f} GB"
+            }
+        
+        return info
+    
     def load_model(self, model_name: str):
         """Load YOLO model"""
         try:
@@ -40,6 +89,9 @@ class YOLODetector:
                 self.model.save(str(model_path))
             else:
                 self.model = YOLO(str(model_path))
+            
+            # Move model to device
+            self.model.to(self.device)
             
             # Get class names
             self.class_names = self.model.names
@@ -154,10 +206,18 @@ class YOLODetector:
             }
     
     def detect_webcam(self, confidence: float = 0.5, iou_threshold: float = 0.45,
-                     callback=None, stop_event=None):
-        """Real-time detection from webcam"""
+                     callback=None, stop_event=None, frame_skip: int = 0):
+        """Real-time detection from webcam with performance optimizations"""
         try:
             cap = cv2.VideoCapture(0)
+            # Set camera properties for better performance
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_FPS, config.MAX_FPS)
+            
+            frame_counter = 0
+            fps_start_time = datetime.now()
+            fps_frame_count = 0
+            current_fps = 0
             
             while cap.isOpened():
                 if stop_event and stop_event.is_set():
@@ -167,21 +227,51 @@ class YOLODetector:
                 if not ret:
                     break
                 
+                # Frame skipping for performance
+                if frame_skip > 0 and frame_counter % (frame_skip + 1) != 0:
+                    frame_counter += 1
+                    if callback:
+                        # Show the frame without detection
+                        callback(frame, [], current_fps)
+                    continue
+                
+                # Calculate FPS
+                fps_frame_count += 1
+                elapsed = (datetime.now() - fps_start_time).total_seconds()
+                if elapsed > 1.0:
+                    current_fps = fps_frame_count / elapsed
+                    fps_frame_count = 0
+                    fps_start_time = datetime.now()
+                
                 # Run detection
                 results = self.model(
                     frame,
                     conf=confidence,
                     iou=iou_threshold,
-                    device=self.device
+                    device=self.device,
+                    verbose=False  # Suppress console output
                 )
                 
                 # Process results
                 detections = self._process_results(results[0])
                 annotated_frame = self._draw_detections(frame, detections)
                 
+                # Add FPS counter to frame
+                cv2.putText(
+                    annotated_frame,
+                    f"FPS: {current_fps:.1f} | Device: {self.device.upper()}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2
+                )
+                
                 # Callback for UI update
                 if callback:
-                    callback(annotated_frame, detections)
+                    callback(annotated_frame, detections, current_fps)
+                
+                frame_counter += 1
             
             cap.release()
             

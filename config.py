@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Application Settings
 APP_NAME = "YOLO Krypton"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 WINDOW_WIDTH = 1400
 WINDOW_HEIGHT = 800
 
@@ -59,6 +59,10 @@ VIDEO_FORMATS = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
 MAX_IMAGE_DISPLAY_SIZE = (1280, 720)
 VIDEO_PREVIEW_FPS = 30
 BATCH_SIZE = 1
+FRAME_SKIP = 0  # Process every Nth frame (0 = no skip)
+MAX_FPS = 30  # Maximum FPS for camera
+DEVICE_OPTIONS = ["Auto", "CPU", "GPU (CUDA)"]
+DEFAULT_DEVICE = "Auto"
 
 # Export Settings
 EXPORT_FORMATS = ["JSON", "CSV", "TXT", "YOLO"]

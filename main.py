@@ -49,6 +49,8 @@ class YOLODetectionApp(ctk.CTk):
         self.video_thread = None
         self.stop_video = threading.Event()
         self.camera_auto_start = True
+        self.current_fps = 0
+        self.frame_skip = 0
         
         # Initialize UI
         self._setup_ui()
@@ -214,9 +216,78 @@ class YOLODetectionApp(ctk.CTk):
         )
         self.iou_label.pack(padx=10)
         
+        # Device selection
+        device_frame = ctk.CTkFrame(self.sidebar)
+        device_frame.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(
+            device_frame,
+            text="Processing Device",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+        
+        self.device_var = ctk.StringVar(value=config.DEFAULT_DEVICE)
+        self.device_dropdown = ctk.CTkComboBox(
+            device_frame,
+            values=config.DEVICE_OPTIONS,
+            variable=self.device_var,
+            command=self._on_device_change,
+            width=250
+        )
+        self.device_dropdown.pack(padx=10, pady=(0, 10))
+        
+        # Device info label
+        self.device_info_label = ctk.CTkLabel(
+            device_frame,
+            text="Device: Detecting...",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.device_info_label.pack(anchor="w", padx=10, pady=(0, 5))
+        
+        # Performance settings
+        perf_frame = ctk.CTkFrame(self.sidebar)
+        perf_frame.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(
+            perf_frame,
+            text="Performance",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+        
+        # Frame skip slider
+        ctk.CTkLabel(perf_frame, text="Frame Skip (0=None):").pack(
+            anchor="w", padx=10, pady=(5, 0)
+        )
+        
+        self.frame_skip_slider = ctk.CTkSlider(
+            perf_frame,
+            from_=0,
+            to=5,
+            number_of_steps=5,
+            command=self._update_frame_skip
+        )
+        self.frame_skip_slider.set(0)
+        self.frame_skip_slider.pack(padx=10, pady=5, fill="x")
+        
+        self.frame_skip_label = ctk.CTkLabel(
+            perf_frame,
+            text="0 (Process all frames)"
+        )
+        self.frame_skip_label.pack(padx=10, pady=(0, 10))
+        
+        # FPS display
+        self.fps_label = ctk.CTkLabel(
+            perf_frame,
+            text="FPS: 0.0",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#43a047"
+        )
+        self.fps_label.pack(anchor="w", padx=10, pady=(5, 10))
+        
         # Camera controls
         camera_frame = ctk.CTkFrame(self.sidebar)
-        camera_frame.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        camera_frame.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
         
         ctk.CTkLabel(
             camera_frame,
@@ -243,7 +314,7 @@ class YOLODetectionApp(ctk.CTk):
         
         # Input source indicator
         source_frame = ctk.CTkFrame(self.sidebar)
-        source_frame.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        source_frame.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
         
         ctk.CTkLabel(
             source_frame,
@@ -292,7 +363,7 @@ class YOLODetectionApp(ctk.CTk):
         
         # Export section
         export_frame = ctk.CTkFrame(self.sidebar)
-        export_frame.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+        export_frame.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
         
         ctk.CTkLabel(
             export_frame,
@@ -442,7 +513,10 @@ class YOLODetectionApp(ctk.CTk):
         self.progress_bar.set(0.5)
         
         try:
-            self.detector = YOLODetector(config.DEFAULT_MODEL)
+            # Get device setting
+            device = self._get_device_string()
+            self.detector = YOLODetector(config.DEFAULT_MODEL, device=device)
+            self._update_device_info()
             self._update_status("Model loaded successfully")
             self.progress_bar.set(1)
         except Exception as e:
@@ -459,6 +533,7 @@ class YOLODetectionApp(ctk.CTk):
         
         try:
             self.detector.load_model(model_path)
+            self._update_device_info()
             self._update_status(f"Loaded {choice}")
             self.progress_bar.set(1)
         except Exception as e:
@@ -466,6 +541,59 @@ class YOLODetectionApp(ctk.CTk):
             self._update_status("Model loading failed")
         finally:
             self.after(1000, lambda: self.progress_bar.set(0))
+    
+    def _on_device_change(self, choice):
+        """Handle device selection change"""
+        if not self.detector:
+            return
+        
+        self._update_status(f"Switching to {choice}...")
+        device = self._get_device_string()
+        actual_device = self.detector.set_device(device)
+        self._update_device_info()
+        
+        # Reload model on new device
+        if self.detector.model:
+            self.detector.model.to(actual_device)
+        
+        self._update_status(f"Switched to {actual_device.upper()}")
+    
+    def _get_device_string(self):
+        """Convert UI device selection to device string"""
+        choice = self.device_var.get()
+        if choice == "Auto":
+            return "auto"
+        elif choice == "CPU":
+            return "cpu"
+        elif choice == "GPU (CUDA)":
+            return "cuda"
+        return "auto"
+    
+    def _update_device_info(self):
+        """Update device information display"""
+        if not self.detector:
+            return
+        
+        info = self.detector.get_device_info()
+        device_text = f"Device: {info['device'].upper()}"
+        
+        if info['device'] == 'cuda':
+            device_text = f"GPU: {info['device_name']}"
+            if 'memory_info' in info and info['memory_info']:
+                device_text += f"\nVRAM: {info['memory_info']['free']} free"
+        
+        self.device_info_label.configure(text=device_text)
+    
+    def _update_frame_skip(self, value):
+        """Update frame skip setting"""
+        self.frame_skip = int(value)
+        if self.frame_skip == 0:
+            text = "0 (Process all frames)"
+        elif self.frame_skip == 1:
+            text = "1 (Process every 2nd frame)"
+        else:
+            text = f"{self.frame_skip} (Process every {self.frame_skip+1} frames)"
+        self.frame_skip_label.configure(text=text)
     
     def _update_confidence_label(self, value):
         """Update confidence threshold label"""
@@ -706,12 +834,14 @@ class YOLODetectionApp(ctk.CTk):
         confidence = self.confidence_slider.get()
         iou = self.iou_slider.get()
         
-        def frame_callback(frame, detections):
+        def frame_callback(frame, detections, fps=0):
             # Store last frame for snapshot
             self.last_frame = frame.copy()
+            self.current_fps = fps
             
             self.after(0, lambda: self._display_cv2_image(frame))
             self.after(0, lambda: self._update_status(f"Camera: {len(detections)} objects detected"))
+            self.after(0, lambda: self.fps_label.configure(text=f"FPS: {fps:.1f}"))
             
             if detections:
                 self.detection_results = detections
@@ -723,11 +853,18 @@ class YOLODetectionApp(ctk.CTk):
                     {'detections': detections, 'total_objects': len(detections)}
                 ))
         
-        self.detector.detect_webcam(confidence, iou, callback=frame_callback, stop_event=self.stop_video)
+        self.detector.detect_webcam(
+            confidence, 
+            iou, 
+            callback=frame_callback, 
+            stop_event=self.stop_video,
+            frame_skip=self.frame_skip
+        )
         
         self.is_detecting = False
         self.after(0, lambda: self.camera_btn.configure(text="▶ Resume Camera", fg_color="green"))
         self.after(0, lambda: self.camera_status.configure(text="● Camera Stopped", text_color="#e53935"))
+        self.after(0, lambda: self.fps_label.configure(text="FPS: 0.0"))
     
     def _stop_detection(self):
         """Stop ongoing detection"""

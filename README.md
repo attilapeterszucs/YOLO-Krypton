@@ -1,8 +1,11 @@
 # 🚀 YOLO Krypton
 
-**Advanced Object Detection System**
+**Advanced Object Detection System with GPU Acceleration**
 
 A professional, camera-first GUI application for real-time object detection using YOLOv8 (Ultralytics). YOLO Krypton starts with live camera detection by default and provides an intuitive interface for detecting objects in real-time, with additional support for images and videos through a convenient menu system.
+
+## 🎮 GPU Support
+This application supports both CPU and NVIDIA GPU processing for optimal performance. With GPU acceleration, achieve up to 10x faster detection speeds!
 
 ## ✨ Features
 
@@ -18,6 +21,14 @@ A professional, camera-first GUI application for real-time object detection usin
 - **Batch Processing**: Process entire videos frame by frame
 
 ### Advanced Features
+- **GPU/CPU Selection**: 
+  - Automatic GPU detection
+  - Hot-swap between CPU and GPU
+  - VRAM usage monitoring
+- **Performance Optimization**:
+  - Frame skipping (0-5 levels)
+  - Real-time FPS counter
+  - Optimized video processing
 - **Adjustable Parameters**: 
   - Confidence threshold slider (0.1 - 1.0)
   - IOU threshold slider for NMS (0.1 - 1.0)
@@ -48,29 +59,58 @@ A professional, camera-first GUI application for real-time object detection usin
   - `Esc`: Stop detection
 - **Visual Feedback**: 
   - Color-coded bounding boxes for different object classes
-  - Live camera status indicator
   - Real-time object count
 - **Responsive Design**: Resizable window with adaptive layout
 
 ## 📋 Requirements
 
-- Python 3.8 or higher
-- CUDA-capable GPU (optional, for faster inference)
+### Minimum Requirements
+- Python 3.8+
+- Windows/Linux/macOS
 - Webcam (optional, for live detection)
+- 4GB+ RAM recommended
+
+### For GPU Acceleration (Optional but Recommended)
+- NVIDIA GPU with CUDA Compute Capability 3.5+
+- NVIDIA Driver 450.80.02 or higher
+- CUDA 11.8 compatible GPU
+- 4GB+ VRAM recommended
 
 ## 🚀 Installation
 
-1. **Clone or download this repository**:
+### Option 1: With GPU Support (Recommended for NVIDIA GPUs)
+
+1. Clone the repository:
 ```bash
-cd d:/Programming/PythonDev/Study/MachineLearning/YOLOE
+git clone https://github.com/attilapeterszucs/YOLO-Krypton.git
+cd YOLO-Krypton
 ```
 
-2. **Install required packages**:
+2. Install PyTorch with CUDA support:
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+3. Install other dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Run the application**:
+### Option 2: CPU Only Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/attilapeterszucs/YOLO-Krypton.git
+cd YOLO-Krypton
+```
+
+2. Install all dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## 🏃 Running the Application
+
 ```bash
 python main.py
 ```

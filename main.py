@@ -56,6 +56,9 @@ class YOLODetectionApp(ctk.CTk):
         self.video_paused = False
         self.video_frame_count = 0
         self.video_total_frames = 0
+        self.video_fps = 30
+        self.video_speed = 1.0
+        self.video_seeking = False
         
         # Initialize UI
         self._setup_ui()
@@ -448,40 +451,103 @@ class YOLODetectionApp(ctk.CTk):
         """Create video playback controls"""
         self.video_controls_frame = ctk.CTkFrame(self.detection_tab)
         
-        # Video progress bar
-        self.video_progress = ctk.CTkProgressBar(self.video_controls_frame)
-        self.video_progress.set(0)
-        self.video_progress.pack(fill="x", padx=10, pady=(10, 5))
+        # Video seek slider (acts as progress bar and seek control)
+        seek_frame = ctk.CTkFrame(self.video_controls_frame)
+        seek_frame.pack(fill="x", padx=10, pady=(10, 5))
         
-        # Controls container
+        self.video_slider = ctk.CTkSlider(
+            seek_frame,
+            from_=0,
+            to=100,
+            command=self._on_video_seek,
+            width=None
+        )
+        self.video_slider.set(0)
+        self.video_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        # Time display next to slider
+        self.video_time_label = ctk.CTkLabel(
+            seek_frame,
+            text="0:00 / 0:00",
+            font=ctk.CTkFont(size=11)
+        )
+        self.video_time_label.pack(side="right")
+        
+        # Main controls container
         controls_container = ctk.CTkFrame(self.video_controls_frame)
         controls_container.pack(fill="x", padx=10, pady=5)
         
+        # Left controls (playback)
+        left_controls = ctk.CTkFrame(controls_container)
+        left_controls.pack(side="left")
+        
+        # Restart button
+        self.video_restart_btn = ctk.CTkButton(
+            left_controls,
+            text="⏮",
+            width=40,
+            command=self._restart_video
+        )
+        self.video_restart_btn.pack(side="left", padx=2)
+        
         # Play/Pause button
         self.video_play_btn = ctk.CTkButton(
-            controls_container,
-            text="⏸ Pause",
-            width=80,
+            left_controls,
+            text="⏸",
+            width=40,
             command=self._toggle_video_playback
         )
-        self.video_play_btn.pack(side="left", padx=5)
+        self.video_play_btn.pack(side="left", padx=2)
         
         # Stop button
         self.video_stop_btn = ctk.CTkButton(
-            controls_container,
-            text="⏹ Stop",
-            width=80,
+            left_controls,
+            text="⏹",
+            width=40,
             command=self._stop_video_playback
         )
-        self.video_stop_btn.pack(side="left", padx=5)
+        self.video_stop_btn.pack(side="left", padx=2)
         
-        # Time label
-        self.video_time_label = ctk.CTkLabel(
-            controls_container,
-            text="Frame 0/0",
-            font=ctk.CTkFont(size=12)
+        # Center info
+        center_info = ctk.CTkFrame(controls_container)
+        center_info.pack(side="left", padx=20)
+        
+        self.video_info_label = ctk.CTkLabel(
+            center_info,
+            text="No video loaded",
+            font=ctk.CTkFont(size=11)
         )
-        self.video_time_label.pack(side="left", padx=20)
+        self.video_info_label.pack()
+        
+        # Right controls (speed)
+        right_controls = ctk.CTkFrame(controls_container)
+        right_controls.pack(side="right", padx=10)
+        
+        ctk.CTkLabel(
+            right_controls,
+            text="Speed:",
+            font=ctk.CTkFont(size=11)
+        ).pack(side="left", padx=(0, 5))
+        
+        self.video_speed_var = ctk.StringVar(value="1.0x")
+        self.video_speed_menu = ctk.CTkComboBox(
+            right_controls,
+            values=["0.25x", "0.5x", "1.0x", "1.5x", "2.0x"],
+            variable=self.video_speed_var,
+            command=self._on_speed_change,
+            width=80
+        )
+        self.video_speed_menu.pack(side="left")
+        
+        # Loop checkbox
+        self.video_loop_var = ctk.BooleanVar(value=False)
+        self.video_loop_check = ctk.CTkCheckBox(
+            right_controls,
+            text="Loop",
+            variable=self.video_loop_var,
+            width=60
+        )
+        self.video_loop_check.pack(side="left", padx=(10, 0))
         
         # Initially hide video controls
         # They will be shown when a video is loaded
@@ -837,40 +903,167 @@ class YOLODetectionApp(ctk.CTk):
         self.progress_bar.set(0)
     
     def _detect_on_video(self):
-        """Run detection on video"""
-        if self.is_detecting:
-            self._stop_detection()
+        """Run detection on video file"""
+        from ui_components import update_results_display
+        
+        if not self.current_video_path:
             return
-        
-        self.is_detecting = True
-        self.detect_btn.configure(text="⏹ Stop Detection", fg_color="red")
+            
         self._update_status("Processing video...")
+        self.is_detecting = True
+        self.video_paused = False
         
-        self.video_thread = threading.Thread(target=self._process_video, daemon=True)
-        self.video_thread.start()
-    
-    def _process_video(self):
-        """Process video in background thread"""
+        # Update video controls
+        self.video_play_btn.configure(text="⏸")
+        
         confidence = self.confidence_slider.get()
         iou = self.iou_slider.get()
         
-        def frame_callback(frame, current, total):
-            progress = current / total if total > 0 else 0
-            self.progress_bar.set(progress)
+        def video_callback(frame, detections, current_frame, total_frames, fps):
+            if self.video_paused:
+                return
+                
+            self.video_frame_count = current_frame
+            self.video_total_frames = total_frames
+            
             self.after(0, lambda: self._display_cv2_image(frame))
-            self.after(0, lambda: self._update_status(f"Processing frame {current}/{total}"))
+            
+            # Update progress slider if not seeking
+            if not self.video_seeking:
+                progress = (current_frame / total_frames * 100) if total_frames > 0 else 0
+                self.after(0, lambda: self.video_slider.set(progress))
+            
+            # Update time display
+            current_time = self._frames_to_time(current_frame, self.video_fps)
+            total_time = self._frames_to_time(total_frames, self.video_fps)
+            self.after(0, lambda: self.video_time_label.configure(
+                text=f"{current_time} / {total_time}"
+            ))
+            self.after(0, lambda: self.video_info_label.configure(
+                text=f"Frame {current_frame}/{total_frames} | {fps:.1f} FPS"
+            ))
+            self.after(0, lambda: self._update_status(
+                f"Processing: Frame {current_frame}/{total_frames} | FPS: {fps:.1f}"
+            ))
+            self.after(0, lambda: self.fps_label.configure(text=f"FPS: {fps:.1f}"))
+            
+            if detections:
+                self.detection_results = detections
+                self.after(0, lambda: update_results_display(
+                    self.results_text,
+                    {'detections': detections, 'total_objects': len(detections)}
+                ))
+                self.after(0, lambda: self._update_statistics(
+                    {'detections': detections, 'total_objects': len(detections)}
+                ))
         
-        results = self.detector.detect_video(
-            self.current_video, confidence, iou, callback=frame_callback
-        )
+        # Run in thread
+        def process_video():
+            # Create new video capture with frame skip support
+            cap = cv2.VideoCapture(self.current_video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.video_fps = cap.get(cv2.CAP_PROP_FPS)
+            self.video_total_frames = total_frames
+            frame_count = self.video_frame_count if self.video_frame_count > 0 else 0
+            
+            # Seek to current position if needed
+            if frame_count > 0:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
+            
+            fps_start_time = datetime.now()
+            fps_frame_count = 0
+            current_fps = 0
+            
+            while cap.isOpened():
+                if self.stop_video.is_set():
+                    break
+                    
+                if self.video_paused:
+                    time.sleep(0.1)
+                    continue
+                    
+                # Handle seeking
+                if self.video_seeking:
+                    seek_frame = int(self.video_slider.get() / 100 * total_frames)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, seek_frame)
+                    frame_count = seek_frame
+                    self.video_frame_count = seek_frame
+                    self.video_seeking = False
+                    
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                frame_count += 1
+                
+                # Calculate FPS
+                fps_frame_count += 1
+                elapsed = (datetime.now() - fps_start_time).total_seconds()
+                if elapsed > 1.0:
+                    current_fps = fps_frame_count / elapsed
+                    fps_frame_count = 0
+                    fps_start_time = datetime.now()
+                
+                # Frame skipping
+                if self.frame_skip > 0 and (frame_count - 1) % (self.frame_skip + 1) != 0:
+                    # Show frame without detection
+                    cv2.putText(
+                        frame,
+                        f"FPS: {current_fps:.1f} | Frame: {frame_count}/{total_frames} | Skipped",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 165, 255),
+                        2
+                    )
+                    video_callback(frame, [], frame_count, total_frames, current_fps)
+                    continue
+                
+                # Run detection
+                results = self.detector.model(
+                    frame,
+                    conf=confidence,
+                    iou=iou,
+                    verbose=False
+                )
+                
+                # Process results
+                detections = self.detector._process_results(results[0])
+                annotated_frame = self.detector._draw_detections(frame, detections)
+                
+                # Add info overlay
+                cv2.putText(
+                    annotated_frame,
+                    f"FPS: {current_fps:.1f} | Frame: {frame_count}/{total_frames}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2
+                )
+                
+                video_callback(annotated_frame, detections, frame_count, total_frames, current_fps)
+                
+                # Apply speed control
+                if self.video_speed != 1.0:
+                    delay = (1.0 / self.video_fps) / self.video_speed
+                    time.sleep(max(0, delay))
+            
+            cap.release()
+            
+            # Check if should loop
+            if self.video_loop_var.get() and not self.stop_video.is_set():
+                self.video_frame_count = 0
+                self.after(0, lambda: self._detect_on_video())
+            else:
+                self.is_detecting = False
+                self.after(0, lambda: self.video_play_btn.configure(text="▶"))
+                self.after(0, lambda: self._update_status(f"Video complete: {frame_count} frames processed"))
+                self.after(0, lambda: self.fps_label.configure(text="FPS: 0.0"))
         
-        if results['success']:
-            self.detection_results = results['all_detections']
-            self.after(0, lambda: self._update_status(f"Video processing complete: {results['total_frames']} frames"))
-        
-        self.is_detecting = False
-        self.after(0, lambda: self.detect_btn.configure(text="🚀 Run Detection", fg_color="green"))
-        self.after(0, lambda: self.progress_bar.set(0))
+        self.stop_video.clear()
+        self.video_thread = threading.Thread(target=process_video, daemon=True)
+        self.video_thread.start()
     
     def _run_webcam_detection(self):
         """Run real-time webcam detection"""
@@ -944,10 +1137,10 @@ class YOLODetectionApp(ctk.CTk):
         if self.current_video == "video":
             self.video_paused = not self.video_paused
             if self.video_paused:
-                self.video_play_btn.configure(text="▶ Play")
+                self.video_play_btn.configure(text="▶")
                 self._update_status("Video paused")
             else:
-                self.video_play_btn.configure(text="⏸ Pause")
+                self.video_play_btn.configure(text="⏸")
                 self._update_status("Video playing")
                 if not self.is_detecting:
                     self._detect_on_video()
@@ -957,10 +1150,52 @@ class YOLODetectionApp(ctk.CTk):
         self.stop_video.set()
         self.video_paused = True
         self.is_detecting = False
-        self.video_progress.set(0)
-        self.video_time_label.configure(text="Frame 0/0")
-        self.video_play_btn.configure(text="▶ Play")
+        self.video_frame_count = 0
+        self.video_slider.set(0)
+        self.video_time_label.configure(text="0:00 / 0:00")
+        self.video_play_btn.configure(text="▶")
         self._update_status("Video stopped")
+    
+    def _restart_video(self):
+        """Restart video from beginning"""
+        self.video_frame_count = 0
+        self.video_slider.set(0)
+        self.video_paused = False
+        if not self.is_detecting:
+            self._detect_on_video()
+        self._update_status("Video restarted")
+    
+    def _on_video_seek(self, value):
+        """Handle video seek slider change"""
+        if self.current_video == "video" and self.video_total_frames > 0:
+            self.video_seeking = True
+            seek_frame = int(value / 100 * self.video_total_frames)
+            self.video_frame_count = seek_frame
+            # Update time display immediately
+            current_time = self._frames_to_time(seek_frame, self.video_fps)
+            total_time = self._frames_to_time(self.video_total_frames, self.video_fps)
+            self.video_time_label.configure(text=f"{current_time} / {total_time}")
+    
+    def _on_speed_change(self, value):
+        """Handle video speed change"""
+        speed_map = {
+            "0.25x": 0.25,
+            "0.5x": 0.5,
+            "1.0x": 1.0,
+            "1.5x": 1.5,
+            "2.0x": 2.0
+        }
+        self.video_speed = speed_map.get(value, 1.0)
+        self._update_status(f"Playback speed: {value}")
+    
+    def _frames_to_time(self, frames, fps):
+        """Convert frame number to time string"""
+        if fps <= 0:
+            return "0:00"
+        seconds = int(frames / fps)
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes}:{seconds:02d}"
     
     def _display_cv2_image(self, cv_image):
         """Display OpenCV image in canvas"""

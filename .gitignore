@@ -27,6 +27,7 @@ wheels/
 models/*.pt
 models/*.onnx
 models/*.engine
+*.pt
 
 # Output files
 output/

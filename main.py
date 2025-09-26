@@ -4,6 +4,7 @@ A modern, camera-first application for real-time object detection using YOLOv8
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, Menu
+import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
@@ -16,7 +17,6 @@ from typing import Optional, Dict, Any
 import config
 from yolo_detector import YOLODetector
 import os
-{{ ... }}
 from ui_components import (
     create_stat_card, update_stat_card,
     create_results_display, update_results_display

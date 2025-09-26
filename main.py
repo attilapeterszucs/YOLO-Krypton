@@ -8,6 +8,8 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
+import os
+import warnings
 from pathlib import Path
 import threading
 import time
@@ -16,7 +18,6 @@ import json
 from typing import Optional, Dict, Any
 import config
 from yolo_detector import YOLODetector
-import os
 from ui_components import (
     create_stat_card, update_stat_card,
     create_results_display, update_results_display
@@ -25,6 +26,10 @@ from ui_components import (
 # Set appearance mode and color theme
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+# Suppress OpenCV warnings about video codecs
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class YOLODetectionApp(ctk.CTk):
@@ -842,10 +847,16 @@ class YOLODetectionApp(ctk.CTk):
         try:
             # Try different video backends for better compatibility
             cap = None
-            for backend in [cv2.CAP_FFMPEG, cv2.CAP_ANY]:
-                cap = cv2.VideoCapture(video_path, backend)
-                if cap.isOpened():
-                    break
+            old_level = cv2.getLogLevel()
+            cv2.setLogLevel(3)  # Suppress warnings
+            
+            try:
+                for backend in [cv2.CAP_FFMPEG, cv2.CAP_DSHOW, cv2.CAP_ANY]:
+                    cap = cv2.VideoCapture(video_path, backend)
+                    if cap.isOpened():
+                        break
+            finally:
+                cv2.setLogLevel(old_level)
             
             if not cap or not cap.isOpened():
                 messagebox.showwarning("Video Error", "Could not open video file. Try a different format (MP4, AVI, MOV).")
@@ -980,10 +991,18 @@ class YOLODetectionApp(ctk.CTk):
         def process_video():
             # Create new video capture with better error handling
             cap = None
-            for backend in [cv2.CAP_FFMPEG, cv2.CAP_ANY]:
-                cap = cv2.VideoCapture(self.current_video_path, backend)
-                if cap.isOpened():
-                    break
+            # Suppress codec warnings temporarily
+            old_level = cv2.getLogLevel()
+            cv2.setLogLevel(3)  # Only show errors
+            
+            try:
+                # Try to open video with different backends
+                for backend in [cv2.CAP_FFMPEG, cv2.CAP_DSHOW, cv2.CAP_ANY]:
+                    cap = cv2.VideoCapture(self.current_video_path, backend)
+                    if cap.isOpened():
+                        break
+            finally:
+                cv2.setLogLevel(old_level)  # Restore log level
             
             if not cap or not cap.isOpened():
                 self.after(0, lambda: messagebox.showerror("Video Error", "Cannot process video. Try a different format."))
@@ -1051,17 +1070,23 @@ class YOLODetectionApp(ctk.CTk):
                     video_callback(frame, [], frame_count, total_frames, current_fps)
                     continue
                 
-                # Run detection
-                results = self.detector.model(
-                    frame,
-                    conf=confidence,
-                    iou=iou,
-                    verbose=False
-                )
-                
-                # Process results
-                detections = self.detector._process_results(results[0])
-                annotated_frame = self.detector._draw_detections(frame, detections)
+                # Run detection (use detect_frame method to avoid model fusion issues)
+                try:
+                    results = self.detector.model.predict(
+                        frame,
+                        conf=confidence,
+                        iou=iou,
+                        verbose=False,
+                        device=self.detector.device
+                    )
+                    
+                    # Process results
+                    detections = self.detector._process_results(results[0])
+                    annotated_frame = self.detector._draw_detections(frame, detections)
+                except Exception as e:
+                    print(f"Detection error on frame {frame_count}: {e}")
+                    annotated_frame = frame
+                    detections = []
                 
                 # Add info overlay
                 cv2.putText(

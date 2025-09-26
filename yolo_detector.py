@@ -32,22 +32,25 @@ class YOLODetector:
         
     def set_device(self, device: str = "auto"):
         """Set the device for inference"""
+        old_device = self.device if hasattr(self, 'device') else None
+        
         if device.lower() == "auto":
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         elif device.lower() == "cpu":
             self.device = 'cpu'
         elif device.lower() in ["gpu", "cuda"]:
             if torch.cuda.is_available():
-                self.device = 'cuda'
+                self.device = 'cuda:0'
             else:
                 print("CUDA not available, falling back to CPU")
                 self.device = 'cpu'
         else:
             self.device = 'cpu'
         
-        # Update model device if model is loaded
-        if self.model:
-            self.model.to(self.device)
+        # Update model device if model is loaded and device changed
+        if self.model and old_device != self.device:
+            print(f"Moving model from {old_device} to {self.device}")
+            self.model = self.model.to(self.device)
         
         return self.device
     
@@ -107,22 +110,20 @@ class YOLODetector:
             return False
     
     def _generate_class_colors(self):
-        """Generate unique colors for each class"""
         np.random.seed(42)
         for i, class_name in enumerate(self.class_names.values()):
             color = tuple(np.random.randint(0, 255, 3).tolist())
             self.colors[class_name] = color
     
-    def detect_image(self, image_path: str, confidence: float = 0.5, 
-                    iou_threshold: float = 0.45) -> Dict[str, Any]:
-        """Perform detection on a single image"""
+    def detect_image(self, image_path: str, confidence: float = 0.5, iou_threshold: float = 0.45) -> Dict:
+        """Detect objects in a single image"""
         try:
-            # Run inference
+            # Run detection (model already on correct device)
             results = self.model(
                 image_path,
                 conf=confidence,
                 iou=iou_threshold,
-                device=self.device
+                verbose=False
             )
             
             # Process results
@@ -151,8 +152,8 @@ class YOLODetector:
             }
     
     def detect_video(self, video_path: str, confidence: float = 0.5,
-                    iou_threshold: float = 0.45, callback=None) -> Dict[str, Any]:
-        """Perform detection on video with frame callback"""
+                    iou_threshold: float = 0.45, callback=None) -> Dict:
+        """Detect objects in a video with frame callback"""
         try:
             cap = cv2.VideoCapture(video_path)
             fps = int(cap.get(cv2.CAP_PROP_FPS))
@@ -166,12 +167,12 @@ class YOLODetector:
                 if not ret:
                     break
                 
-                # Run detection on frame
+                # Run detection (model already on correct device)
                 results = self.model(
                     frame,
                     conf=confidence,
                     iou=iou_threshold,
-                    device=self.device
+                    verbose=False
                 )
                 
                 # Process results
@@ -228,10 +229,19 @@ class YOLODetector:
                     break
                 
                 # Frame skipping for performance
-                if frame_skip > 0 and frame_counter % (frame_skip + 1) != 0:
-                    frame_counter += 1
+                frame_counter += 1
+                if frame_skip > 0 and (frame_counter - 1) % (frame_skip + 1) != 0:
                     if callback:
-                        # Show the frame without detection
+                        # Show the frame without detection but with FPS overlay
+                        cv2.putText(
+                            frame,
+                            f"FPS: {current_fps:.1f} | Device: {self.device.upper()} | Skipped",
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 165, 255),  # Orange for skipped frames
+                            2
+                        )
                         callback(frame, [], current_fps)
                     continue
                 
@@ -243,12 +253,11 @@ class YOLODetector:
                     fps_frame_count = 0
                     fps_start_time = datetime.now()
                 
-                # Run detection
+                # Run detection (model already on correct device)
                 results = self.model(
                     frame,
                     conf=confidence,
                     iou=iou_threshold,
-                    device=self.device,
                     verbose=False  # Suppress console output
                 )
                 
@@ -270,8 +279,6 @@ class YOLODetector:
                 # Callback for UI update
                 if callback:
                     callback(annotated_frame, detections, current_fps)
-                
-                frame_counter += 1
             
             cap.release()
             

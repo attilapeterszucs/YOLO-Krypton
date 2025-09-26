@@ -4,18 +4,19 @@ A modern, camera-first application for real-time object detection using YOLOv8
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, Menu
-import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
 from pathlib import Path
 import threading
-import queue
+import time
 from datetime import datetime
 import json
 from typing import Optional, Dict, Any
 import config
 from yolo_detector import YOLODetector
+import os
+{{ ... }}
 from ui_components import (
     create_stat_card, update_stat_card,
     create_results_display, update_results_display
@@ -44,6 +45,7 @@ class YOLODetectionApp(ctk.CTk):
         self.detector = None
         self.current_image = None
         self.current_video = "webcam"  # Start with webcam by default
+        self.current_video_path = None
         self.detection_results = []
         self.is_detecting = False
         self.video_thread = None
@@ -51,6 +53,9 @@ class YOLODetectionApp(ctk.CTk):
         self.camera_auto_start = True
         self.current_fps = 0
         self.frame_skip = 0
+        self.video_paused = False
+        self.video_frame_count = 0
+        self.video_total_frames = 0
         
         # Initialize UI
         self._setup_ui()
@@ -439,6 +444,48 @@ class YOLODetectionApp(ctk.CTk):
         )
         self.results_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
     
+    def _create_video_controls(self):
+        """Create video playback controls"""
+        self.video_controls_frame = ctk.CTkFrame(self.detection_tab)
+        
+        # Video progress bar
+        self.video_progress = ctk.CTkProgressBar(self.video_controls_frame)
+        self.video_progress.set(0)
+        self.video_progress.pack(fill="x", padx=10, pady=(10, 5))
+        
+        # Controls container
+        controls_container = ctk.CTkFrame(self.video_controls_frame)
+        controls_container.pack(fill="x", padx=10, pady=5)
+        
+        # Play/Pause button
+        self.video_play_btn = ctk.CTkButton(
+            controls_container,
+            text="⏸ Pause",
+            width=80,
+            command=self._toggle_video_playback
+        )
+        self.video_play_btn.pack(side="left", padx=5)
+        
+        # Stop button
+        self.video_stop_btn = ctk.CTkButton(
+            controls_container,
+            text="⏹ Stop",
+            width=80,
+            command=self._stop_video_playback
+        )
+        self.video_stop_btn.pack(side="left", padx=5)
+        
+        # Time label
+        self.video_time_label = ctk.CTkLabel(
+            controls_container,
+            text="Frame 0/0",
+            font=ctk.CTkFont(size=12)
+        )
+        self.video_time_label.pack(side="left", padx=20)
+        
+        # Initially hide video controls
+        # They will be shown when a video is loaded
+    
     def _create_statistics_view(self):
         """Create statistics visualization area"""
         from ui_components import create_stat_card
@@ -609,6 +656,10 @@ class YOLODetectionApp(ctk.CTk):
         if self.current_video == "webcam" and self.is_detecting:
             self._stop_detection()
         
+        # Hide video controls if visible
+        if hasattr(self, 'video_controls_frame'):
+            self.video_controls_frame.pack_forget()
+        
         file_path = filedialog.askopenfilename(
             title="Select Image",
             filetypes=[
@@ -641,18 +692,26 @@ class YOLODetectionApp(ctk.CTk):
         )
         
         if file_path:
-            self.current_video = file_path
+            self.current_video = "video"
+            self.current_video_path = file_path
             self.current_image = None
+            self.video_paused = False
             self._display_video_frame(file_path)
             self._update_status(f"Loaded: {Path(file_path).name}")
             self.source_label.configure(text="🎥 Video")
             self.camera_status.configure(text="● Camera Stopped", text_color="#e53935")
+            # Show video controls
+            self.video_controls_frame.pack(side="bottom", fill="x", padx=10, pady=5)
             # Auto-start video processing
             self._run_detection()
     
     def _switch_to_camera(self):
         """Switch to camera input"""
         if self.current_video != "webcam":
+            # Hide video controls if visible
+            if hasattr(self, 'video_controls_frame'):
+                self.video_controls_frame.pack_forget()
+            
             self.current_video = "webcam"
             self.current_image = None
             self.source_label.configure(text="📹 Live Camera")
@@ -745,7 +804,7 @@ class YOLODetectionApp(ctk.CTk):
         elif self.current_video == "webcam":
             if not self.is_detecting:
                 self._run_webcam_detection()
-        elif self.current_video:
+        elif self.current_video == "video":
             self._detect_on_video()
         else:
             messagebox.showinfo("No Input", "Please load an image or video first")
@@ -873,8 +932,35 @@ class YOLODetectionApp(ctk.CTk):
         if self.current_video == "webcam":
             self.camera_btn.configure(text="▶ Resume Camera", fg_color="green")
             self.camera_status.configure(text="● Camera Paused", text_color="#fb8c00")
+        elif self.current_video == "video":
+            self.video_paused = True
+            if hasattr(self, 'video_play_btn'):
+                self.video_play_btn.configure(text="▶ Play")
         self._update_status("Detection stopped")
         self.progress_bar.set(0)
+    
+    def _toggle_video_playback(self):
+        """Toggle video play/pause"""
+        if self.current_video == "video":
+            self.video_paused = not self.video_paused
+            if self.video_paused:
+                self.video_play_btn.configure(text="▶ Play")
+                self._update_status("Video paused")
+            else:
+                self.video_play_btn.configure(text="⏸ Pause")
+                self._update_status("Video playing")
+                if not self.is_detecting:
+                    self._detect_on_video()
+    
+    def _stop_video_playback(self):
+        """Stop video playback completely"""
+        self.stop_video.set()
+        self.video_paused = True
+        self.is_detecting = False
+        self.video_progress.set(0)
+        self.video_time_label.configure(text="Frame 0/0")
+        self.video_play_btn.configure(text="▶ Play")
+        self._update_status("Video stopped")
     
     def _display_cv2_image(self, cv_image):
         """Display OpenCV image in canvas"""
